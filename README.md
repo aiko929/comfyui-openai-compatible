@@ -1,0 +1,97 @@
+# ComfyUI — OpenAI Compatible LLM
+
+One node that talks to **any** OpenAI-compatible endpoint (Mammouth, OpenRouter, Groq, Together,
+LM Studio, Ollama, vLLM, llama.cpp, ...). It fetches the model list from the endpoint itself and
+takes as many text inputs as you plug into it.
+
+Node: **OpenAI Compatible LLM** (category `api/text`).
+
+## Usage
+
+1. Add the node and set `base_url`, e.g. `https://api.mammouth.ai/v1`
+   (the part *before* `/models` and `/chat/completions`).
+2. Paste your key into `api_key` (`sk-...`).
+3. Press **Refresh models**. The `model` dropdown is filled from `GET {base_url}/models`.
+   It also refreshes automatically when you change the URL or key, and when a workflow is loaded.
+4. Connect one or more STRING outputs to `text_1`, `text_2`, ... — a new slot appears each time
+   you connect one, up to 16.
+5. The `text` output is the model's answer.
+
+## Inputs
+
+| Input | Notes |
+|---|---|
+| `base_url` | Endpoint root. Trailing `/` and a missing `https://` are handled. |
+| `api_key` | See *API keys* below. |
+| `model` | Populated by **Refresh models**. |
+| `text_1...text_16` | Prompt parts. Empty ones are skipped. Slots grow as you connect them. |
+| `system_prompt` | Optional system message. |
+| `input_mode` | `join` (default): all texts become one user message. `separate_messages`: one user message per input. |
+| `separator` | Used by `join` mode. `\n` and `\t` become real newlines/tabs. Default `\n\n`. |
+| `temperature` | `-1` omits the field from the request (useful for reasoning models that reject it). |
+| `max_tokens` | `0` leaves it to the provider. |
+| `timeout` | Seconds to wait for the response. |
+| `seed` | Never sent to the API — it only decides whether the node re-runs or returns its cached answer. Set *control after generate* to `randomize` to always call the API. |
+| `reuse_last_result` | **On**: output the answer from last time, without calling the API. **Off**: generate normally. See below. |
+
+## Reusing the last answer
+
+Switch `reuse_last_result` on and the node stops calling the API: it outputs whatever it produced
+last time, even if the prompts, model or system message changed. Switch it off and the next run
+generates again. Useful for iterating on the rest of a workflow without paying for tokens or
+waiting on the model, and for keeping an answer you liked while you change something downstream.
+
+Details:
+
+- The answer is kept on disk, in `user/openai_compatible/last_results.json`, so it survives a
+  ComfyUI restart.
+- It is stored per node **and** per workflow (keyed by the workflow's uuid plus the node id), so
+  two copies of the node — or the same workflow opened twice — never hand each other their text.
+- If the toggle is on but nothing has been stored yet, one answer is generated and kept, rather
+  than failing.
+- While the toggle is on, `model` and `base_url` are not even looked at, so a stale model
+  selection or an empty key won't stop the workflow.
+- Turning it off does not erase anything: the next successful generation overwrites the stored
+  answer.
+
+## API keys
+
+The key is stored in the workflow JSON, so a shared workflow leaks it. To avoid that, leave
+`api_key` empty and set an environment variable instead:
+
+- `OPENAI_COMPATIBLE_API_KEY`, or
+- `OPENAI_API_KEY`
+
+Or point at a specific variable by typing `env:MY_VARIABLE` into the widget.
+
+## How the model list works
+
+The frontend extension (`web/openai_compatible.js`) posts the URL and key to the
+`/openai_compatible/models` route added by this package; ComfyUI's Python process calls
+`GET {base_url}/models` and returns the ids. This avoids browser CORS restrictions, and the key
+never leaves your machine except towards your endpoint. Results are cached for 30 s; the
+**Refresh models** button always bypasses that cache.
+
+## Troubleshooting
+
+- **"Could not load models"** — check the URL ends in `/v1` (or whatever your provider uses) and
+  that the key is valid. The exact HTTP status and body are in the toast and the ComfyUI console.
+- **Model list is empty after loading a workflow** — the list saved in the workflow is shown first,
+  then refreshed; press **Refresh models** if the endpoint was unreachable.
+- **`404` on `/chat/completions`** — some providers use a different path prefix; put the full root
+  in `base_url`.
+- **Provider rejects `temperature`** — set it to `-1`.
+- **The node keeps returning the same text** — `reuse_last_result` is on. If it's off, ComfyUI is
+  reusing its own cached output because nothing upstream changed; bump `seed`.
+
+## Files
+
+```
+comfyui-openai-compatible/
+  __init__.py                     extension registration + WEB_DIRECTORY
+  nodes.py                        the node
+  client.py                       async HTTP client for /models and /chat/completions
+  routes.py                       POST /openai_compatible/models
+  store.py                        on-disk memory of each node's last answer
+  web/openai_compatible.js        model dropdown + refresh button
+```

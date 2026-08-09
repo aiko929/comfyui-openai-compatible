@@ -1,0 +1,9 @@
+[project]
+name = "comfyui-openai-compatible"
+version = "1.0.0"
+description = "Query any OpenAI-compatible chat endpoint from ComfyUI, with model auto-discovery and a variable number of text inputs."
+license = { text = "MIT" }
+requires-python = ">=3.10"
+
+[tool.comfy]
+DisplayName = "OpenAI Compatible LLM"

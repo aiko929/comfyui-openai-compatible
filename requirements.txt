@@ -1,0 +1,2 @@
+# aiohttp ships with ComfyUI; listed here so the package also works standalone.
+aiohttp>=3.9
