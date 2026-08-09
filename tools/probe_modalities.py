@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import io as io_module
 import json
 import os
 import sys
@@ -30,34 +31,62 @@ from client import OpenAICompatibleError, chat_completion, list_models  # noqa: 
 
 DEFAULT_BASE_URL = "https://api.mammouth.ai/v1"
 
-# 2x2 red PNG.
-IMAGE_PNG = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR4nGP8z8DAwMDAxAADCAYADiAA/9k5f8gAAAAASUVORK5CYII="
+QUESTION = "Reply with the single word: ok"
+IMAGE_QUESTION = "What word is written in this image? Answer with just that word."
+
+# Errors that say nothing about modality support -- rate limits, capacity, upstream hiccups.
+TRANSIENT = ("429", "500", "502", "503", "504", "no deployments available", "timed out", "overloaded")
+# Wording providers use when the model itself cannot accept the content.
+UNSUPPORTED = (
+    "support image input", "support video", "does not support image", "image input",
+    "vision", "modality", "multimodal", "invalid content type", "unsupported content",
 )
 
-QUESTION = "Reply with the single word: ok"
+
+def make_image() -> bytes:
+    """Generate a real 256x256 PNG with legible text.
+
+    Deliberately not a hardcoded base64 blob: a 2x2 pixel or subtly malformed image gets
+    rejected by providers as a bad *image*, which looks exactly like a missing *capability*.
+    """
+    from PIL import Image, ImageDraw
+
+    image = Image.new("RGB", (256, 256), (30, 90, 200))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle([64, 64, 192, 192], fill=(240, 200, 40))
+    draw.text((10, 10), "HELLO", fill=(255, 255, 255))
+    buffer = io_module.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def make_video() -> bytes | None:
     """A minimal mp4, encoded on the fly so no binary blob has to live in the repo."""
     try:
-        import io
-
         import av
     except ImportError:
         return None
 
-    buffer = io.BytesIO()
+    try:
+        import numpy as np
+    except ImportError:
+        return None
+
+    size, frames = 64, 12
+    buffer = io_module.BytesIO()
     try:
         container = av.open(buffer, mode="w", format="mp4")
-        stream = container.add_stream("libx264", rate=4)
-        stream.width, stream.height = 32, 32
+        stream = container.add_stream("libx264", rate=6)
+        stream.width, stream.height = size, size
         stream.pix_fmt = "yuv420p"
-        for _ in range(4):
-            frame = av.VideoFrame(32, 32, "yuv420p")
-            for plane in frame.planes:
-                plane.update(bytes(len(plane)))
-            container.mux(stream.encode(frame))
+        for index in range(frames):
+            # A white square sliding left to right, so a model that really sees the video has
+            # something to describe -- a static black clip proves much less.
+            array = np.zeros((size, size, 3), dtype=np.uint8)
+            array[:, :, 2] = 180  # blue background
+            left = int(index * (size - 16) / max(1, frames - 1))
+            array[24:40, left : left + 16] = 255
+            container.mux(stream.encode(av.VideoFrame.from_ndarray(array, format="rgb24")))
         container.mux(stream.encode(None))
         container.close()
     except Exception as error:  # noqa: BLE001 - probing is best-effort
@@ -70,41 +99,57 @@ def data_url(mime: str, payload: bytes) -> str:
     return f"data:{mime};base64,{base64.b64encode(payload).decode('ascii')}"
 
 
-def blocks_for(modality: str, video: bytes | None) -> list[dict] | None:
+def blocks_for(modality: str, image: bytes | None, video: bytes | None) -> list[dict] | None:
     if modality == "text":
         return [{"type": "text", "text": QUESTION}]
-    if modality == "image":
+    if modality == "image" and image:
         return [
-            {"type": "text", "text": QUESTION},
-            {"type": "image_url", "image_url": {"url": data_url("image/png", IMAGE_PNG)}},
+            {"type": "text", "text": IMAGE_QUESTION},
+            {"type": "image_url", "image_url": {"url": data_url("image/png", image)}},
         ]
     if modality == "video" and video:
         return [
-            {"type": "text", "text": QUESTION},
+            {"type": "text", "text": "Describe this video in one short sentence."},
             {"type": "video_url", "video_url": {"url": data_url("video/mp4", video)}},
         ]
     return None
 
 
-async def probe(base_url: str, api_key: str, model: str, modality: str, video: bytes | None, timeout: float):
-    content = blocks_for(modality, video)
+def classify(message: str) -> str:
+    """'no' only when the provider says the content type is the problem."""
+    lowered = message.lower()
+    if any(hint in lowered for hint in TRANSIENT):
+        return "transient"
+    if any(hint in lowered for hint in UNSUPPORTED):
+        return "no"
+    return "error"
+
+
+async def probe(base_url, api_key, model, modality, image, video, timeout, retries=2):
+    """Returns (verdict, note, answer). Retries transient failures before giving a verdict."""
+    content = blocks_for(modality, image, video)
     if content is None:
-        return "skipped", "no probe available"
-    try:
-        await chat_completion(
-            base_url=base_url,
-            api_key=api_key,
-            model=model,
-            messages=[{"role": "user", "content": content}],
-            max_tokens=16,
-            timeout=timeout,
-        )
-        return "yes", ""
-    except OpenAICompatibleError as error:
-        message = " ".join(str(error).split())
-        return "no", message[:200]
-    except Exception as error:  # noqa: BLE001
-        return "error", f"{type(error).__name__}: {error}"
+        return "skipped", "no probe available", ""
+
+    note = ""
+    for attempt in range(retries + 1):
+        try:
+            answer = await chat_completion(
+                base_url=base_url, api_key=api_key, model=model,
+                messages=[{"role": "user", "content": content}],
+                max_tokens=64, timeout=timeout,
+            )
+            return "yes", "", " ".join(answer.split())[:100]
+        except OpenAICompatibleError as error:
+            note = " ".join(str(error).split())
+            verdict = classify(note)
+            if verdict != "transient":
+                return verdict, note[:400], ""
+            if attempt < retries:
+                await asyncio.sleep(6)
+        except Exception as error:  # noqa: BLE001
+            return "error", f"{type(error).__name__}: {error}", ""
+    return "unknown", f"still failing after {retries + 1} tries: {note[:400]}", ""
 
 
 async def main() -> int:
@@ -136,24 +181,38 @@ async def main() -> int:
     if "video" in wanted and video is None:
         print("PyAV unavailable, skipping the video probe.\n")
         wanted = [m for m in wanted if m != "video"]
+    image = make_image() if "image" in wanted else None
 
     print(f"Probing {len(models)} model(s) at {args.base_url} for: {', '.join(wanted)}\n")
     semaphore = asyncio.Semaphore(max(1, args.concurrency))
     results: dict[str, dict] = {}
 
+    async def one(model: str, modality: str) -> dict:
+        async with semaphore:
+            verdict, note, answer = await probe(
+                args.base_url, args.api_key, model, modality, image, video, args.timeout
+            )
+        return {"supported": verdict, "note": note, "answer": answer}
+
     async def run(model: str):
-        row = {}
-        for modality in wanted:
-            async with semaphore:
-                verdict, note = await probe(args.base_url, args.api_key, model, modality, video, args.timeout)
-            row[modality] = {"supported": verdict, "note": note}
+        # Baseline first: if plain text fails, any media verdict for this model is meaningless.
+        row = {"text": await one(model, "text")}
+        if row["text"]["supported"] != "yes":
+            for modality in wanted:
+                row[modality] = {"supported": "unknown", "note": "the model failed a text-only request", "answer": ""}
+        else:
+            for modality in wanted:
+                row[modality] = await one(model, modality)
         results[model] = row
-        summary = "  ".join(f"{m}={row[m]['supported']}" for m in wanted)
+
+        summary = "  ".join(f"{m}={row[m]['supported']}" for m in ["text"] + wanted)
         print(f"{model:<45} {summary}")
-        for modality in wanted:
-            note = row[modality]["note"]
-            if note and row[modality]["supported"] != "yes":
-                print(f"{'':<45}   {modality}: {note}")
+        for modality in ["text"] + wanted:
+            entry = row[modality]
+            if entry["supported"] == "yes" and entry["answer"]:
+                print(f"{'':<45}   {modality} replied: {entry['answer']!r}")
+            elif entry["note"]:
+                print(f"{'':<45}   {modality}: {entry['note']}")
 
     await asyncio.gather(*(run(model) for model in models))
 

@@ -67,13 +67,30 @@ python tools/probe_modalities.py --api-key sk-your-key
 
 Useful flags: `--only gpt,gemini` to probe just some models, `--modalities image` to skip video,
 `--json report.json` to save the table. It reads `OPENAI_COMPATIBLE_API_KEY` if you omit
-`--api-key`. Note this makes one real (tiny, `max_tokens=16`) request per model per modality, so
-it costs a few tokens. Models that are text-only typically answer with an HTTP 400 naming the
-unsupported content type — that message is printed next to the verdict.
+`--api-key`. It makes a couple of small requests per model, so it costs a few tokens.
 
-As a rule of thumb, on an aggregator like Mammouth the GPT-4o/4.1/5, Claude, and Gemini families
-accept images, while text-only models (many Mistral, DeepSeek, Kimi and Qwen text variants) do
-not, and video generally only works on Gemini. Confirm with the probe rather than trusting that.
+How it avoids lying to you:
+
+- **A text-only baseline runs first.** If a model can't even answer "reply ok", its media verdict
+  is reported as `unknown` instead of `no`.
+- **The probe image is generated, not hardcoded.** A 2×2 or subtly malformed image gets rejected as
+  a bad *image*, which looks exactly like a missing *capability*. It sends a real 256×256 PNG with
+  the word HELLO and shows you what the model replied — if it answers "HELLO", it genuinely saw it.
+- **Transient failures are retried.** `429`, `5xx` and "no deployments available" are not verdicts;
+  after retries they're reported as `unknown`.
+- **`no` requires the provider to say so** — the error must mention image/video/modality wording.
+  Anything else is `error`, with the full message printed.
+
+Measured on Mammouth (August 2026):
+
+| Model | Text | Image | Video |
+|---|---|---|---|
+| `gpt-5.6-luna` | yes | **yes** — read "HELLO" off a 256×256 PNG | not tested |
+| `gemini-3.6-flash` | yes | **yes** | **yes** — described a white square moving left→right |
+| `deepseek-v4-flash-0731` | yes | **no** — `404 "No endpoints found that support image input"` | not tested |
+
+So on this provider it's per-model, and the error for a text-only model is explicit and readable.
+Don't generalise from three models — run the probe for the ones you actually use.
 
 ## Reusing the last answer
 
