@@ -33,6 +33,47 @@ Node: **OpenAI Compatible LLM** (category `api/text`).
 | `timeout` | Seconds to wait for the response. |
 | `seed` | Never sent to the API — it only decides whether the node re-runs or returns its cached answer. Set *control after generate* to `randomize` to always call the API. |
 | `reuse_last_result` | **On**: output the answer from last time, without calling the API. **Off**: generate normally. See below. |
+| `images` | Optional IMAGE input. Every frame of the batch is sent as its own image. Needs a vision model. |
+| `video` | Optional VIDEO input, inlined as a `video_url` block. Provider-specific — see below. |
+| `image_detail` | OpenAI `detail` hint: `auto`, `low` (much cheaper), `high` (reads fine print). |
+| `image_format` | `jpeg` (default), `png` (lossless, better for screenshots and text), `webp`. |
+| `image_max_side` | Downscale so the longest side is at most this many pixels. `0` sends full size. |
+| `video_max_mb` | Refuse to upload a video bigger than this, instead of failing at the provider. Default 20. |
+
+## Images and video
+
+Connect an IMAGE to `images` and the prompt is sent as OpenAI-style content blocks — a text block
+followed by one `image_url` block per frame, as a `data:` URL. A batch of 4 becomes 4 images in one
+message. With `input_mode = separate_messages` the media is attached to the **last** user message.
+
+With nothing connected to `images` or `video`, the request body is byte-for-byte what it was
+before: `content` stays a plain string, so providers that dislike block arrays keep working.
+
+Video is sent as a `video_url` block. **This is not part of the OpenAI spec** — providers that
+accept video at all use this shape, and everything else rejects the request with a readable error.
+Mammouth's release notes mention video-to-text with Gemini up to 20 MB, hence the default
+`video_max_mb`; the size is checked locally so you get an error immediately instead of after a
+long upload.
+
+### Which of your models accept images or video?
+
+The `/models` endpoint doesn't report modalities, and provider docs are usually vague, so ask the
+endpoint directly. `tools/probe_modalities.py` sends a 2×2 pixel image (and a tiny generated video
+clip) to each model and reports which ones accept it:
+
+```bash
+python tools/probe_modalities.py --api-key sk-your-key
+```
+
+Useful flags: `--only gpt,gemini` to probe just some models, `--modalities image` to skip video,
+`--json report.json` to save the table. It reads `OPENAI_COMPATIBLE_API_KEY` if you omit
+`--api-key`. Note this makes one real (tiny, `max_tokens=16`) request per model per modality, so
+it costs a few tokens. Models that are text-only typically answer with an HTTP 400 naming the
+unsupported content type — that message is printed next to the verdict.
+
+As a rule of thumb, on an aggregator like Mammouth the GPT-4o/4.1/5, Claude, and Gemini families
+accept images, while text-only models (many Mistral, DeepSeek, Kimi and Qwen text variants) do
+not, and video generally only works on Gemini. Confirm with the probe rather than trusting that.
 
 ## Reusing the last answer
 
@@ -83,6 +124,10 @@ never leaves your machine except towards your endpoint. Results are cached for 3
 - **Provider rejects `temperature`** — set it to `-1`.
 - **The node keeps returning the same text** — `reuse_last_result` is on. If it's off, ComfyUI is
   reusing its own cached output because nothing upstream changed; bump `seed`.
+- **`400` mentioning image/content type after connecting an image** — that model is text-only. Run
+  `tools/probe_modalities.py` to see which of your models take images.
+- **Image request is huge or times out** — set `image_max_side` to e.g. `1536`, keep
+  `image_format = jpeg`, and use `image_detail = low` if you only need the gist.
 
 ## Files
 
@@ -93,5 +138,7 @@ comfyui-openai-compatible/
   client.py                       async HTTP client for /models and /chat/completions
   routes.py                       POST /openai_compatible/models
   store.py                        on-disk memory of each node's last answer
+  media.py                        IMAGE / VIDEO -> data URLs and content blocks
+  tools/probe_modalities.py       asks your endpoint which models accept images/video
   web/openai_compatible.js        model dropdown + refresh button
 ```

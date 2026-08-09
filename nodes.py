@@ -6,7 +6,7 @@ import logging
 
 from comfy_api.latest import io
 
-from . import store
+from . import media, store
 from .client import (
     DEFAULT_BASE_URL,
     MODEL_PLACEHOLDER,
@@ -178,6 +178,59 @@ class OpenAICompatibleChat(io.ComfyNode):
                         "answer is generated and kept."
                     ),
                 ),
+                io.Image.Input(
+                    "images",
+                    optional=True,
+                    tooltip=(
+                        "Optional image(s) to look at. Every frame of the batch is sent as its own "
+                        "image, attached to the last user message. Needs a vision-capable model."
+                    ),
+                ),
+                io.Video.Input(
+                    "video",
+                    optional=True,
+                    tooltip=(
+                        "Optional video, inlined as a video_url block. Support is provider-specific "
+                        "(Mammouth documents 20 MB for Gemini); most models reject it."
+                    ),
+                ),
+                io.Combo.Input(
+                    "image_detail",
+                    options=["auto", "low", "high"],
+                    default="auto",
+                    optional=True,
+                    advanced=True,
+                    tooltip="OpenAI 'detail' hint. 'low' is much cheaper, 'high' reads fine print.",
+                ),
+                io.Combo.Input(
+                    "image_format",
+                    options=["jpeg", "png", "webp"],
+                    default="jpeg",
+                    optional=True,
+                    advanced=True,
+                    tooltip="How images are encoded. png is lossless (better for text/UI screenshots).",
+                ),
+                io.Int.Input(
+                    "image_max_side",
+                    default=0,
+                    min=0,
+                    max=8192,
+                    optional=True,
+                    advanced=True,
+                    tooltip=(
+                        "Downscale images so the longest side is at most this many pixels, to save "
+                        "tokens and upload time. 0 sends them at full size."
+                    ),
+                ),
+                io.Int.Input(
+                    "video_max_mb",
+                    default=20,
+                    min=1,
+                    max=500,
+                    optional=True,
+                    advanced=True,
+                    tooltip="Refuse to upload a video larger than this, instead of failing at the provider.",
+                ),
             ],
             outputs=[io.String.Output(display_name="text")],
             hidden=[io.Hidden.unique_id, io.Hidden.extra_pnginfo],
@@ -205,6 +258,12 @@ class OpenAICompatibleChat(io.ComfyNode):
         timeout: int = 180,
         seed: int = 0,
         reuse_last_result: bool = False,
+        images=None,
+        video=None,
+        image_detail: str = "auto",
+        image_format: str = "jpeg",
+        image_max_side: int = 0,
+        video_max_mb: int = 20,
     ) -> io.NodeOutput:
         key = store.make_key(_workflow_id(cls.hidden.extra_pnginfo), cls.hidden.unique_id)
         if reuse_last_result:
@@ -225,16 +284,33 @@ class OpenAICompatibleChat(io.ComfyNode):
             )
 
         texts = _ordered_texts(prompts)
-        if not texts:
-            raise ValueError("Connect at least one non-empty text input to this node.")
+        image_urls = media.image_data_urls(images, image_format=image_format, max_side=image_max_side)
+        video_url = media.video_data_url(video, max_mb=video_max_mb)
+        if not texts and not image_urls and not video_url:
+            raise ValueError(
+                "Nothing to send: connect a non-empty text input, an image, or a video."
+            )
+        if image_urls or video_url:
+            logging.info("[openai-compatible] sending %s to %s", media.describe(image_urls, video_url), model)
 
         messages: list[dict] = []
         if system_prompt and system_prompt.strip():
             messages.append({"role": "system", "content": system_prompt.strip()})
+
         if input_mode == "separate_messages":
-            messages.extend({"role": "user", "content": text} for text in texts)
+            user_texts = texts or [""]
         else:
-            messages.append({"role": "user", "content": _unescape(separator).join(texts)})
+            user_texts = [_unescape(separator).join(texts)]
+        # Media rides along with the last user message, so it stays next to the text it belongs to.
+        for index, text in enumerate(user_texts):
+            last = index == len(user_texts) - 1
+            content = media.content_blocks(
+                text,
+                image_urls if last else [],
+                video_url if last else None,
+                image_detail=image_detail,
+            )
+            messages.append({"role": "user", "content": content})
 
         answer = await chat_completion(
             base_url=base_url,
