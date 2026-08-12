@@ -2,11 +2,20 @@
 name = "comfyui-openai-compatible"
 version = "1.0.0"
 description = "Query any OpenAI-compatible chat endpoint from ComfyUI, with model auto-discovery and a variable number of text inputs."
-license = { text = "MIT" }
+license = { file = "LICENSE" }
 requires-python = ">=3.10"
+classifiers = [
+    "Operating System :: OS Independent"
+]
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
 
 [project.urls]
 Repository = "https://github.com/aiko929/comfyui-openai-compatible"
+"Bug Tracker" = "https://github.com/aiko929/comfyui-openai-compatible/issues"
 
 [tool.comfy]
+PublisherId = ""
 DisplayName = "OpenAI Compatible LLM"

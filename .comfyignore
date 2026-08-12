@@ -1,0 +1,6 @@
+# Development-only files, kept out of the published registry archive.
+.claude/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
