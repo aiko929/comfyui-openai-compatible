@@ -56,16 +56,16 @@ class OpenAICompatibleChat(io.ComfyNode):
             display_name="OpenAI Compatible LLM",
             category="api/text",
             description=(
-                "Talk to any OpenAI-compatible endpoint (Mammouth, OpenRouter, Groq, LM Studio, "
+                "Talk to any OpenAI-compatible endpoint (OpenAI, OpenRouter, Groq, LM Studio, "
                 "Ollama, vLLM, ...). Enter the base URL and API key, press 'Refresh models' to "
                 "load the model list, then connect as many text inputs as you need."
             ),
-            search_aliases=["openai", "llm", "chatgpt", "mammouth", "openrouter", "ollama", "prompt"],
+            search_aliases=["openai", "llm", "chatgpt", "openrouter", "groq", "ollama", "prompt"],
             inputs=[
                 io.String.Input(
                     "base_url",
                     default=DEFAULT_BASE_URL,
-                    placeholder="https://api.mammouth.ai/v1",
+                    placeholder="https://api.openai.com/v1",
                     tooltip="Endpoint root, i.e. the part before /models and /chat/completions.",
                 ),
                 io.String.Input(
@@ -191,7 +191,7 @@ class OpenAICompatibleChat(io.ComfyNode):
                     optional=True,
                     tooltip=(
                         "Optional video, inlined as a video_url block. Support is provider-specific "
-                        "(Mammouth documents 20 MB for Gemini); most models reject it."
+                        "and size limits are usually low; most models reject it."
                     ),
                 ),
                 io.Combo.Input(

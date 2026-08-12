@@ -12,7 +12,7 @@ import os
 
 import aiohttp
 
-DEFAULT_BASE_URL = "https://api.mammouth.ai/v1"
+DEFAULT_BASE_URL = "https://api.openai.com/v1"
 MODEL_PLACEHOLDER = "(press Refresh models)"
 ENV_KEY_NAMES = ("OPENAI_COMPATIBLE_API_KEY", "OPENAI_API_KEY")
 
@@ -29,7 +29,7 @@ def normalize_base_url(base_url: str) -> str:
     """Return the endpoint root without a trailing slash, e.g. https://host/v1."""
     base = (base_url or "").strip().rstrip("/")
     if not base:
-        raise OpenAICompatibleError("No endpoint URL given. Example: https://api.mammouth.ai/v1")
+        raise OpenAICompatibleError("No endpoint URL given. Example: https://api.openai.com/v1")
     if not base.startswith(("http://", "https://")):
         base = "https://" + base
     return base

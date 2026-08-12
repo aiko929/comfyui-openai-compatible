@@ -1,15 +1,34 @@
 # ComfyUI — OpenAI Compatible LLM
 
-One node that talks to **any** OpenAI-compatible endpoint (Mammouth, OpenRouter, Groq, Together,
+One node that talks to **any** OpenAI-compatible endpoint (OpenAI, OpenRouter, Groq, Together,
 LM Studio, Ollama, vLLM, llama.cpp, ...). It fetches the model list from the endpoint itself and
 takes as many text inputs as you plug into it.
 
 Node: **OpenAI Compatible LLM** (category `api/text`).
 
+## Install
+
+Clone into your `custom_nodes` folder and install the one dependency, then restart ComfyUI:
+
+```bash
+cd ComfyUI/custom_nodes
+git clone https://github.com/aiko929/comfyui-openai-compatible.git
+pip install -r comfyui-openai-compatible/requirements.txt
+```
+
+On the Windows portable build, use the bundled Python for the last step:
+
+```bash
+python_embeded\python.exe -m pip install -r ComfyUI\custom_nodes\comfyui-openai-compatible\requirements.txt
+```
+
+Requires Python 3.10+. The node appears under **api/text**, or search for "OpenAI" in the node menu.
+
 ## Usage
 
-1. Add the node and set `base_url`, e.g. `https://api.mammouth.ai/v1`
-   (the part *before* `/models` and `/chat/completions`).
+1. Add the node and set `base_url` — the part *before* `/models` and `/chat/completions`.
+   Hosted providers usually look like `https://api.example.com/v1`; a local server is typically
+   something like `http://localhost:11434/v1`.
 2. Paste your key into `api_key` (`sk-...`).
 3. Press **Refresh models**. The `model` dropdown is filled from `GET {base_url}/models`.
    It also refreshes automatically when you change the URL or key, and when a workflow is loaded.
@@ -46,19 +65,18 @@ Connect an IMAGE to `images` and the prompt is sent as OpenAI-style content bloc
 followed by one `image_url` block per frame, as a `data:` URL. A batch of 4 becomes 4 images in one
 message. With `input_mode = separate_messages` the media is attached to the **last** user message.
 
-With nothing connected to `images` or `video`, the request body is byte-for-byte what it was
-before: `content` stays a plain string, so providers that dislike block arrays keep working.
+With nothing connected to `images` or `video`, `content` stays a plain string rather than a block
+array, so providers that only accept the simple text shape keep working.
 
 Video is sent as a `video_url` block. **This is not part of the OpenAI spec** — providers that
 accept video at all use this shape, and everything else rejects the request with a readable error.
-Mammouth's release notes mention video-to-text with Gemini up to 20 MB, hence the default
-`video_max_mb`; the size is checked locally so you get an error immediately instead of after a
-long upload.
+`video_max_mb` defaults to 20 because provider ceilings tend to sit around there; the size is
+checked locally so you get an error immediately instead of after a long upload.
 
 ### Which of your models accept images or video?
 
 The `/models` endpoint doesn't report modalities, and provider docs are usually vague, so ask the
-endpoint directly. `tools/probe_modalities.py` sends a 2×2 pixel image (and a tiny generated video
+endpoint directly. `tools/probe_modalities.py` sends a small image (and a short generated video
 clip) to each model and reports which ones accept it:
 
 ```bash
@@ -69,28 +87,7 @@ Useful flags: `--only gpt,gemini` to probe just some models, `--modalities image
 `--json report.json` to save the table. It reads `OPENAI_COMPATIBLE_API_KEY` if you omit
 `--api-key`. It makes a couple of small requests per model, so it costs a few tokens.
 
-How it avoids lying to you:
-
-- **A text-only baseline runs first.** If a model can't even answer "reply ok", its media verdict
-  is reported as `unknown` instead of `no`.
-- **The probe image is generated, not hardcoded.** A 2×2 or subtly malformed image gets rejected as
-  a bad *image*, which looks exactly like a missing *capability*. It sends a real 256×256 PNG with
-  the word HELLO and shows you what the model replied — if it answers "HELLO", it genuinely saw it.
-- **Transient failures are retried.** `429`, `5xx` and "no deployments available" are not verdicts;
-  after retries they're reported as `unknown`.
-- **`no` requires the provider to say so** — the error must mention image/video/modality wording.
-  Anything else is `error`, with the full message printed.
-
-Measured on Mammouth (August 2026):
-
-| Model | Text | Image | Video |
-|---|---|---|---|
-| `gpt-5.6-luna` | yes | **yes** — read "HELLO" off a 256×256 PNG | not tested |
-| `gemini-3.6-flash` | yes | **yes** | **yes** — described a white square moving left→right |
-| `deepseek-v4-flash-0731` | yes | **no** — `404 "No endpoints found that support image input"` | not tested |
-
-So on this provider it's per-model, and the error for a text-only model is explicit and readable.
-Don't generalise from three models — run the probe for the ones you actually use.
+Support is per-model, not per-provider, so run the probe against the models you actually use.
 
 ## Reusing the last answer
 

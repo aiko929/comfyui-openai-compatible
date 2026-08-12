@@ -1,8 +1,8 @@
 """Turn ComfyUI IMAGE / VIDEO inputs into the data URLs an OpenAI-compatible API expects.
 
 Images use the widely supported `image_url` content block. Video uses `video_url`, which is not
-part of the OpenAI spec -- providers that accept video at all (Gemini via Mammouth, Qwen, some
-OpenRouter models) use this shape, and the rest reject the request with a readable error.
+part of the OpenAI spec -- the providers that accept video at all use this shape, and the rest
+reject the request with a readable error.
 """
 
 from __future__ import annotations
@@ -117,7 +117,7 @@ def video_data_url(video, max_mb: int = 20) -> str | None:
         raise OpenAICompatibleError(
             f"The video is {len(payload) / 1024 / 1024:.1f} MB, over the {max_mb} MB limit. "
             "Trim it, lower the resolution or frame rate, or raise video_max_mb if your provider "
-            "allows bigger uploads (Mammouth documents 20 MB for Gemini video)."
+            "allows bigger uploads."
         )
     return _data_url(_video_mime(video), payload)
 

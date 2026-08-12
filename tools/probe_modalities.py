@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from client import OpenAICompatibleError, chat_completion, list_models  # noqa: E402
 
-DEFAULT_BASE_URL = "https://api.mammouth.ai/v1"
+DEFAULT_BASE_URL = "https://api.openai.com/v1"
 
 QUESTION = "Reply with the single word: ok"
 IMAGE_QUESTION = "What word is written in this image? Answer with just that word."
